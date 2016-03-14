@@ -58,6 +58,10 @@ DisplaysPanel::DisplaysPanel( QWidget* parent )
   QPushButton* add_button = new QPushButton( "Add" );
   add_button->setShortcut( QKeySequence( QString( "Ctrl+N" )));
   add_button->setToolTip( "Add a new display, Ctrl+N" );
+  copy_button_ = new QPushButton( "Copy" );
+  copy_button_->setShortcut( QKeySequence( QString( "Ctrl+C" )));
+  copy_button_->setToolTip( "Copy a display, Ctrl+C" );
+  copy_button_->setEnabled( false );
   remove_button_ = new QPushButton( "Remove" );
   remove_button_->setShortcut( QKeySequence( QString( "Ctrl+X" )));
   remove_button_->setToolTip( "Remove displays, Ctrl+X" );
@@ -69,6 +73,7 @@ DisplaysPanel::DisplaysPanel( QWidget* parent )
 
   QHBoxLayout* button_layout = new QHBoxLayout;
   button_layout->addWidget( add_button );
+  button_layout->addWidget( copy_button_ );
   button_layout->addWidget( remove_button_ );
   button_layout->addWidget( rename_button_ );
   button_layout->setContentsMargins( 2, 0, 2, 2 );
@@ -81,6 +86,7 @@ DisplaysPanel::DisplaysPanel( QWidget* parent )
   setLayout( layout );
 
   connect( add_button, SIGNAL( clicked( bool )), this, SLOT( onNewDisplay() ));
+  connect( copy_button_, SIGNAL( clicked( bool )), this, SLOT( onCopyDisplay() ));
   connect( remove_button_, SIGNAL( clicked( bool )), this, SLOT( onDeleteDisplay() ));
   connect( rename_button_, SIGNAL( clicked( bool )), this, SLOT( onRenameDisplay() ));
   connect( property_grid_, SIGNAL( selectionHasChanged() ), this, SLOT( onSelectionChanged() ));
@@ -127,6 +133,25 @@ void DisplaysPanel::onNewDisplay()
   activateWindow(); // Force keyboard focus back on main window.
 }
 
+void DisplaysPanel::onCopyDisplay()
+{
+  QList<Display*> displays_to_copy = property_grid_->getSelectedObjects<Display>();
+
+  for( int i = 0; i < displays_to_copy.size(); i++ )
+  {
+    // initialize display
+    QString lookup_name = displays_to_copy[ i ]->getClassId();
+    QString display_name = displays_to_copy[ i ]->getName();
+    Display *disp = vis_manager_->createDisplay( lookup_name, display_name, true );
+    // copy config
+    Config config;
+    displays_to_copy[ i ]->save(config);
+    disp->load(config);
+  }
+  vis_manager_->startUpdate();
+  activateWindow(); // Force keyboard focus back on main window.
+}
+
 void DisplaysPanel::onDeleteDisplay()
 {
   QList<Display*> displays_to_delete = property_grid_->getSelectedObjects<Display>();
@@ -148,6 +173,7 @@ void DisplaysPanel::onSelectionChanged()
 
   int num_displays_selected = displays.size();
 
+  copy_button_->setEnabled( num_displays_selected > 0 );
   remove_button_->setEnabled( num_displays_selected > 0 );
   rename_button_->setEnabled( num_displays_selected == 1 );
 }
