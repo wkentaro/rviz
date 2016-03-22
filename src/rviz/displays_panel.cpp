@@ -147,6 +147,7 @@ void DisplaysPanel::onCopyDisplay()
     Config config;
     displays_to_copy[ i ]->save(config);
     disp->load(config);
+    disp->setName( QString("Copy of ") + display_name );
   }
   vis_manager_->startUpdate();
   activateWindow(); // Force keyboard focus back on main window.
