@@ -38,14 +38,15 @@
 #include <OgreTextureManager.h>
 #include <opencv2/imgproc/imgproc.hpp>
 
-#include <cv_bridge/cv_bridge.h>
 #include <geometry_msgs/Vector3Stamped.h>
 #include <sensor_msgs/image_encodings.h>
+#include <sensor_msgs/fill_image.h>
 #include <tf2_ros/transform_listener.h>
 #include <tf2_ros/transform_broadcaster.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
 
 #include "rviz/image/ros_image_texture.h"
+#include "rviz/image/image_conversion.h"
 
 namespace rviz
 {
@@ -179,16 +180,33 @@ void ROSImageTexture::normalize( T* image_data, size_t image_data_size, std::vec
   }
 }
 
-sensor_msgs::Image::Ptr ROSImageTexture::rotateImage(sensor_msgs::Image::ConstPtr msg)
+void ROSImageTexture::rotateImage(const sensor_msgs::Image::ConstPtr msg, sensor_msgs::Image& dst_msg)
 {
-  // Convert the image into something opencv can handle.
-  cv::Mat in_image = cv_bridge::toCvShare(msg, msg->encoding)->image;
+  // Initialize dst_msg.
+  dst_msg.header = msg->header;
+  dst_msg.data = msg->data;
+  dst_msg.height = msg->height;
+  dst_msg.width = msg->width;
+  dst_msg.step = msg->step;
+  dst_msg.encoding = msg->encoding;
+  dst_msg.is_bigendian = msg->is_bigendian;
+
+  // Convert to QImage.
+  QImage image;
+  try
+  {
+    image = rosMsgToQImage(msg);
+  }
+  catch (std::runtime_error)
+  {
+    return;
+  }
 
   // Compute the output image size.
-  int max_dim = in_image.cols > in_image.rows ? in_image.cols : in_image.rows;
-  int min_dim = in_image.cols < in_image.rows ? in_image.cols : in_image.rows;
+  int max_dim = image.width() > image.height() ? image.width() : image.width();
+  int min_dim = image.width() < image.height() ? image.width() : image.height();
   int noblack_dim = min_dim / sqrt(2);
-  int diag_dim = sqrt(in_image.cols*in_image.cols + in_image.rows*in_image.rows);
+  int diag_dim = sqrt(image.width() * image.width() + image.height() * image.height());
   int candidates[] = {noblack_dim, min_dim, max_dim, diag_dim, diag_dim}; // diag_dim repeated to simplify limit case.
   int output_image_size = 2;
   int step = output_image_size;
@@ -209,7 +227,7 @@ sensor_msgs::Image::Ptr ROSImageTexture::rotateImage(sensor_msgs::Image::ConstPt
     }
     catch (tf2::LookupException& e)
     {
-      ROS_ERROR_THROTTLE(30, "Error rotating image: %s", e.what());
+      return;
     }
   }
 
@@ -228,7 +246,7 @@ sensor_msgs::Image::Ptr ROSImageTexture::rotateImage(sensor_msgs::Image::ConstPt
     }
     catch (tf2::LookupException& e)
     {
-      ROS_ERROR_THROTTLE(30, "Error rotating image: %s", e.what());
+      return;
     }
   }
 
@@ -241,19 +259,26 @@ sensor_msgs::Image::Ptr ROSImageTexture::rotateImage(sensor_msgs::Image::ConstPt
     angle -= atan2(source_vector.vector.y, source_vector.vector.x);
   }
 
-  // Compute the rotation matrix.
-  cv::Mat rot_matrix = cv::getRotationMatrix2D(cv::Point2f(in_image.cols / 2.0, in_image.rows / 2.0), 180 * angle / M_PI, 1);
-  cv::Mat translation = rot_matrix.col(2);
-  rot_matrix.at<double>(0, 2) += (out_size - in_image.cols) / 2.0;
-  rot_matrix.at<double>(1, 2) += (out_size - in_image.rows) / 2.0;
+  // Rotate the image;
+  QPoint center = image.rect().center();
+  QMatrix matrix;
+  matrix.translate(center.x(), center.y());
+  matrix.rotate(180 * angle / M_PI);
+  QImage rotated_image = image.transformed(matrix);
 
-  // Do the rotation
-  cv::Mat out_image;
-  cv::warpAffine(in_image, out_image, rot_matrix, cv::Size(out_size, out_size));
+  // Convert to ROSMsg.
+  sensor_msgs::Image rotated_msg;
+  qImageToRosMsg(rotated_image, rotated_msg);
+  rotated_msg.header.stamp = msg->header.stamp;
+  rotated_msg.header.frame_id = target_frame_;
 
-  sensor_msgs::Image::Ptr dst_msg = cv_bridge::CvImage(msg->header, msg->encoding, out_image).toImageMsg();
-  dst_msg->header.frame_id = target_frame_;
-  return dst_msg;
+  dst_msg.header = rotated_msg.header;
+  dst_msg.data = rotated_msg.data;
+  dst_msg.height = rotated_msg.height;
+  dst_msg.width = rotated_msg.width;
+  dst_msg.step = rotated_msg.step;
+  dst_msg.encoding = rotated_msg.encoding;
+  dst_msg.is_bigendian = rotated_msg.is_bigendian;
 }
 
 bool ROSImageTexture::update()
@@ -279,68 +304,69 @@ bool ROSImageTexture::update()
     return false;
   }
 
-  sensor_msgs::Image::Ptr image = rotateImage(raw_image);
+  sensor_msgs::Image image;
+  rotateImage(raw_image, image);
 
   Ogre::PixelFormat format = Ogre::PF_R8G8B8;
   Ogre::Image ogre_image;
   std::vector<uint8_t> buffer;
 
-  uint8_t* imageDataPtr = (uint8_t*)&image->data[0];
-  size_t imageDataSize = image->data.size();
+  uint8_t* imageDataPtr = (uint8_t*)&image.data[0];
+  size_t imageDataSize = image.data.size();
 
-  if (image->encoding == sensor_msgs::image_encodings::RGB8)
+  if (image.encoding == sensor_msgs::image_encodings::RGB8)
   {
     format = Ogre::PF_BYTE_RGB;
   }
-  else if (image->encoding == sensor_msgs::image_encodings::RGBA8)
+  else if (image.encoding == sensor_msgs::image_encodings::RGBA8)
   {
     format = Ogre::PF_BYTE_RGBA;
   }
-  else if (image->encoding == sensor_msgs::image_encodings::TYPE_8UC4 ||
-           image->encoding == sensor_msgs::image_encodings::TYPE_8SC4 ||
-           image->encoding == sensor_msgs::image_encodings::BGRA8)
+  else if (image.encoding == sensor_msgs::image_encodings::TYPE_8UC4 ||
+           image.encoding == sensor_msgs::image_encodings::TYPE_8SC4 ||
+           image.encoding == sensor_msgs::image_encodings::BGRA8)
   {
     format = Ogre::PF_BYTE_BGRA;
   }
-  else if (image->encoding == sensor_msgs::image_encodings::TYPE_8UC3 ||
-           image->encoding == sensor_msgs::image_encodings::TYPE_8SC3 ||
-           image->encoding == sensor_msgs::image_encodings::BGR8)
+  else if (image.encoding == sensor_msgs::image_encodings::TYPE_8UC3 ||
+           image.encoding == sensor_msgs::image_encodings::TYPE_8SC3 ||
+           image.encoding == sensor_msgs::image_encodings::BGR8)
   {
     format = Ogre::PF_BYTE_BGR;
   }
-  else if (image->encoding == sensor_msgs::image_encodings::TYPE_8UC1 ||
-           image->encoding == sensor_msgs::image_encodings::TYPE_8SC1 ||
-           image->encoding == sensor_msgs::image_encodings::MONO8)
+  else if (image.encoding == sensor_msgs::image_encodings::TYPE_8UC1 ||
+           image.encoding == sensor_msgs::image_encodings::TYPE_8SC1 ||
+           image.encoding == sensor_msgs::image_encodings::MONO8)
   {
     format = Ogre::PF_BYTE_L;
   }
-  else if (image->encoding == sensor_msgs::image_encodings::TYPE_16UC1 ||
-           image->encoding == sensor_msgs::image_encodings::TYPE_16SC1 ||
-           image->encoding == sensor_msgs::image_encodings::MONO16)
+  else if (image.encoding == sensor_msgs::image_encodings::TYPE_16UC1 ||
+           image.encoding == sensor_msgs::image_encodings::TYPE_16SC1 ||
+           image.encoding == sensor_msgs::image_encodings::MONO16)
   {
     imageDataSize /= sizeof(uint16_t);
-    normalize<uint16_t>( (uint16_t*)&image->data[0], imageDataSize, buffer );
+    normalize<uint16_t>( (uint16_t*)&image.data[0], imageDataSize, buffer );
     format = Ogre::PF_BYTE_L;
     imageDataPtr = &buffer[0];
   }
-  else if (image->encoding.find("bayer") == 0)
+  else if (image.encoding.find("bayer") == 0)
   {
     format = Ogre::PF_BYTE_L;
   }
-  else if (image->encoding == sensor_msgs::image_encodings::TYPE_32FC1)
+  else if (image.encoding == sensor_msgs::image_encodings::TYPE_32FC1)
   {
     imageDataSize /= sizeof(float);
-    normalize<float>( (float*)&image->data[0], imageDataSize, buffer );
+    normalize<float>( (float*)&image.data[0], imageDataSize, buffer );
     format = Ogre::PF_BYTE_L;
     imageDataPtr = &buffer[0];
   }
   else
   {
-    throw UnsupportedImageEncoding(image->encoding);
+    throw UnsupportedImageEncoding(image.encoding);
   }
 
-  width_ = image->width;
-  height_ = image->height;
+  width_ = image.width;
+  height_ = image.height;
 
   // TODO: Support different steps/strides
 

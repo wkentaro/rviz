@@ -81,7 +81,7 @@ private:
 
   double updateMedian( std::deque<double>& buffer, double new_value );
 
-  sensor_msgs::Image::Ptr rotateImage(sensor_msgs::Image::ConstPtr msg);
+  void rotateImage(const sensor_msgs::Image::ConstPtr msg, sensor_msgs::Image& dst_msg);
 
   template<typename T>
   void normalize( T* image_data, size_t image_data_size, std::vector<uint8_t> &buffer  );

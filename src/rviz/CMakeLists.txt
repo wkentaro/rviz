@@ -8,11 +8,9 @@ if(UNIX AND NOT APPLE)
   find_package(X11 REQUIRED)
 endif()
 
-find_package(OpenCV REQUIRED core imgproc)
-
 add_subdirectory(default_plugin)
 
-include_directories(. ${OpenCV_INCLUDE_DIRS})
+include_directories(.)
 
 # Build the version number and other build-time constants into the
 # source for access at run-time.
@@ -139,7 +137,6 @@ target_link_libraries(${PROJECT_NAME}
   ${OPENGL_LIBRARIES}
   ${rviz_ADDITIONAL_LIBRARIES}
   ${X11_X11_LIB}
-  ${OpenCV_LIBRARIES}
   assimp
   yaml-cpp
 )
